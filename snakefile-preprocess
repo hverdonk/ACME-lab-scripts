@@ -1,0 +1,129 @@
+######################
+## Helper Functions ##
+######################
+def get_list(filename):
+    """extract a list of files to be analyzed, provided in FILENAME"""
+    my_list = []
+    with open(filename, 'r') as data_in:
+        for line in data_in:
+            my_list.append(line.strip())
+    return(my_list)
+
+###################
+## Configuration ##
+###################
+with open('cluster.json', 'r') as f:
+    data = json.loads(f.read())
+NODES = data['__default__']['nodes']
+PPN = data['__default__']['ppn']
+
+##########
+## DATA ##
+##########
+# type of input file (nex, fasta, etc)
+FILETYPE = "fasta"
+dataDirectory = "/data/shares/veg/hverdonk/primatecdsalignments"
+resultDirectory = "/data/shares/veg/hverdonk/primatecdsalignments-MSS"
+
+# FILETYPE = "nex"
+# dataDirectory = "/data/shares/veg/hverdonk/MSS-sims/vary-dSs/dSs_0.85"
+# resultDirectory = "/data/shares/veg/hverdonk/MSS-sims-aligned/vary-dSs/dSs_0.85" 
+
+#if analyzing particular files from a text list (e.g., when analyzing a subset of the data), uncomment the lines below
+#targetFILES = get_list("")
+#FILES = [dataDirectory + i for i in targetFILES] 
+
+FILES = glob_wildcards(dataDirectory + "/{file}." + FILETYPE).file
+
+################
+## HYPHY vars ##
+################
+hyphy = "/usr/local/bin/hyphy"
+HYPHYMP = "/home/hverdonk/hyphy-develop/HYPHYMP"
+HYPHYMPI = "/home/hverdonk/hyphy-develop/HYPHYMPI"
+LIBPATH = "/home/hverdonk/hyphy-develop/res"
+
+###########################
+## Codon aware MSA tools ##
+###########################
+PRE_MSA = "/home/hverdonk/hyphy-analyses/codon-msa/pre-msa.bf"
+POST_MSA = "/home/hverdonk/hyphy-analyses/codon-msa/post-msa.bf"
+
+###############
+## MSS tools ##
+###############
+FIT_MODEL = "/usr/local/share/hyphy-analyses/FitModel/FitModel.bf"
+# NEUTRAL_SYNREV = resultDirectory + "SynREV-neutral-codons.tsv"
+# NEUTRAL_FA1 = resultDirectory + "FA1-neutral-codons.tsv"
+
+################
+## MG94 tools ##
+################
+FIT_MG94 = "/usr/local/share/hyphy-analyses/FitMG94/FitMG94.bf"
+
+print("Files are: ", FILES)
+
+rule all:
+    input:
+        expand(resultDirectory + "/raxml/{file}.msa.raxml.bestTree", file = FILES)
+        
+rule pre_msa:
+    input: dataDirectory + "/{file}." + FILETYPE
+    output: multiext (resultDirectory +"/pre_msa/{file}", "_protein.fas", "_nuc.fas")
+    shell: 
+        '''
+        mkdir -p {resultDirectory}/pre_msa
+        mpirun -np {PPN} {HYPHYMPI} LIBPATH={LIBPATH} {PRE_MSA} CPU={threads} --input {input} --protein "{resultDirectory}/pre_msa/{wildcards.file}_protein.fas" --rna "{resultDirectory}/pre_msa/{wildcards.file}_nuc.fas"
+        '''
+    
+rule mafft:
+    input: resultDirectory + "/pre_msa/{file}_protein.fas"
+    output: resultDirectory + "/mafft/{file}.prot"
+    threads:
+        PPN
+    shell: 
+        '''
+        mkdir -p {resultDirectory}/mafft
+        /usr/local/bin/mafft --quiet {input} > "{resultDirectory}/mafft/{wildcards.file}.prot"
+        ''' 
+    
+rule post_msa:
+    input: resultDirectory + "/mafft/{file}.prot"
+    output: resultDirectory + "/post_msa/{file}.msa"
+    shell: 
+        '''
+        mkdir -p {resultDirectory}/post_msa
+        mpirun -np {PPN} {HYPHYMPI} LIBPATH={LIBPATH} {POST_MSA} CPU={threads} --protein-msa {input} --nucleotide-sequences "{resultDirectory}/pre_msa/{wildcards.file}_nuc.fas" --output {output}
+        '''
+
+rule raxml:
+    input: resultDirectory + "/post_msa/{file}.msa"
+    output: resultDirectory + "/raxml/{file}.msa.raxml.bestTree"
+    threads:
+        PPN
+    resources:
+        mem_mb=16000
+    shell: 
+        '''
+        mkdir -p {resultDirectory}/raxml
+        raxml-ng --force --msa {input} --model GTR+G --threads {threads} --prefix {resultDirectory}/raxml/{wildcards.file}.msa
+        ''' 
+
+
+# rule MSS:
+#     input: resultDirectory + "/raxml/{file}.msa.raxml.bestTree"
+#     output: resultDirectory + "/MSS/{file}.MSS.json"
+#     threads: 4
+#     shell: 
+#         '''
+#         mkdir -p MSS
+#         {hyphy} /usr/local/share/hyphy-analyses/FitModel/FitModel.bf --model MSS --tree {input} --alignment "{resultDirectory}/post_msa/{wildcards.file}.msa" --mss-type SynREVCodon --output {output}
+#         '''
+
+
+# rule MG94:
+#     input: resultDirectory + "raxml/{file}.msa.raxml.bestTree"
+#     output: resultDirectory + "MG94/{file}.MG94.json"
+#     threads: 4
+#     shell: '{hyphy} {FIT_MG94} --alignment "' + resultDirectory + 'post_msa/{wildcards.file}.msa" --output {output} --tree  {input}'
+

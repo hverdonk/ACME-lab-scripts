@@ -1,0 +1,111 @@
+import traceback
+
+###################
+## Configuration ##
+###################
+PPN = 8
+
+##########
+## DATA ##
+##########
+TREE = "/data/shares/veg/hverdonk/enterobacteria_15species_alignments-MSS/raxml/atpD_15_species.msa.raxml.bestTree"
+AA_PARTITIONS = "/data/shares/veg/hverdonk/neutral-sim.tsv"
+OUTPUT_PREFIXES = ["Ser-six-codons-neutral-ref", "His-two-codons-neutral-ref", "Ser-six-codons-selected-ref", "His-two-codons-selected-ref"]
+BASE_FREQ = "/data/shares/veg/hverdonk/enterobacteria_15species_alignments/atpD_15_species.fasta"
+resultDirectory = "/data/shares/veg/hverdonk/MSS-sims/"
+
+################
+## HYPHY vars ##
+################
+HYPHY = "/usr/local/bin/hyphy"
+HYPHYMP = "/home/hverdonk/hyphy-develop/HYPHYMP"
+HYPHYMPI = "/home/hverdonk/hyphy-develop/HYPHYMPI"
+LIBPATH = "/home/hverdonk/hyphy-develop/res"
+
+###################
+## MSS simulator ##
+###################
+SIM_MSS = "/home/hverdonk/hyphy-analyses/SimulateMG94/SimulateMG94.bf"
+
+###########################
+## Simulation Parameters ##
+###########################
+REPS = 1000
+SIMULATIONS = list(range(1,REPS+1))
+OMEGA_VALS = [0.01]  # [0.01, 0.05, 0.1, 0.5, 1, 2]
+MSS_ALPHA_SELECTED = [0.85]  # [0.01, 0.05, 0.1, 0.5, 1, 2]
+SEQ_LENGTHS = [100, 500, 1000]
+
+
+
+rule all:
+    input:
+        # expand(resultDirectory + "vary-partition/{partition}/{partition}.replicate.{simulation}.nex", partition=OUTPUT_PREFIXES, simulation=SIMULATIONS),
+        # expand(resultDirectory + "vary-omega/omega_{omega}/omega{omega}.replicate.{simulation}.nex", omega=OMEGA_VALS, simulation=SIMULATIONS),
+        expand(resultDirectory +"vary-dSs/dSs_{alphaS}/dSs{alphaS}.replicate.{simulation}.nex", alphaS=MSS_ALPHA_SELECTED, simulation=SIMULATIONS),
+        # expand(resultDirectory +"vary-seqlength/length_{len}/length{len}.replicate.{simulation}.nex", len=SEQ_LENGTHS, simulation=SIMULATIONS)
+
+rule vary_partition:
+    input:
+        newick = TREE,
+        frequencies = BASE_FREQ
+    output:
+        expand(resultDirectory + "vary-partition/{partition}/{partition}.replicate.{simulation}.nex", partition=OUTPUT_PREFIXES, simulation=SIMULATIONS)
+    threads: 4
+    run:
+        try:
+            for prefix in OUTPUT_PREFIXES:
+                shell('mkdir -p ' + resultDirectory + 'vary-partition/' + prefix)
+                shell('{HYPHY} {SIM_MSS} --model MSS --replicates ' + str(REPS) + ' --sites 500 --branch-variation constant-mss --mss-file /data/shares/veg/hverdonk/' + prefix + '.tsv --mss-neutral NEUTRAL --tree {input.newick} --output ' + resultDirectory + 'vary-partition/' + prefix + '/' + prefix + ' --mss-alpha_SELECTED 0.8 --omega 0.1 --base-frequencies {input.frequencies}')
+        except Exception:
+            traceback.print_exc()
+
+rule omega:
+    input: 
+        newick = TREE,
+        partitions = AA_PARTITIONS,
+        frequencies = BASE_FREQ
+    output: 
+        expand(resultDirectory + "vary-omega/omega_{omega}/omega{omega}.replicate.{simulation}.nex", omega=OMEGA_VALS, simulation=SIMULATIONS)
+    threads: 4
+    run:
+        try:
+            for o in OMEGA_VALS:
+                shell('mkdir -p ' + resultDirectory + 'vary-omega/omega_' + str(o))
+                shell('{HYPHY} {SIM_MSS} --model MSS --replicates ' + str(REPS) + ' --sites 500 --branch-variation constant-mss --mss-file {input.partitions} --mss-neutral NEUTRAL --tree {input.newick} --output ' + resultDirectory + 'vary-omega/omega_' + str(o) + '/omega' + str(o) + ' --mss-alpha_SELECTED 0.8 --omega ' + str(o) + ' --base-frequencies {input.frequencies}')
+        except Exception:
+            traceback.print_exc()
+
+rule alpha_selected:
+    input:
+        newick = TREE,
+        partitions = AA_PARTITIONS,
+        frequencies = BASE_FREQ
+    output:
+        expand(resultDirectory + "vary-dSs/dSs_{alphaS}/dSs{alphaS}.replicate.{simulation}.nex", alphaS=MSS_ALPHA_SELECTED, simulation=SIMULATIONS)
+    threads: 4
+    run:
+        try:
+            for a in MSS_ALPHA_SELECTED:
+                shell('mkdir -p ' + resultDirectory + 'vary-dSs/dSs_' + str(a))
+                shell('{HYPHY} {SIM_MSS} --model MSS --replicates ' + str(REPS) + ' --sites 500 --branch-variation constant-mss --mss-file {input.partitions} --mss-neutral NEUTRAL --tree {input.newick} --output ' + resultDirectory + 'vary-dSs/dSs_' + str(a) + '/dSs' + str(a) + ' --mss-alpha_SELECTED ' + str(a) + ' --omega 0.1 --base-frequencies {input.frequencies}')
+        except Exception:
+            traceback.print_exc()
+
+rule length:
+    input:
+        newick = TREE,
+        partitions = AA_PARTITIONS,
+        frequencies = BASE_FREQ
+    output:
+        expand(resultDirectory + "vary-seqlength/length_{len}/length{len}.replicate.{simulation}.nex", len=SEQ_LENGTHS, simulation=SIMULATIONS)
+        # expand(resultDirectory +"vary-seqlength/length{len}.replicate.{simulation}.nex", len=SEQ_LENGTHS, simulation=SIMULATIONS)
+    threads: 4
+    run:
+        try:
+            for l in SEQ_LENGTHS:
+                shell('mkdir -p ' + resultDirectory + 'vary-seqlength/length_' + str(l))
+                shell("{HYPHY} {SIM_MSS} --model MSS --replicates " + str(REPS) + " --sites " + str(l) + "  --branch-variation constant-mss --mss-file {input.partitions} --mss-neutral NEUTRAL --tree {input.newick} --output " + resultDirectory + "vary-seqlength/length_" + str(l) + "/length" + str(l) + " --mss-alpha_SELECTED 0.8 --omega 0.1 --base-frequencies {input.frequencies}")
+        except Exception:
+            traceback.print_exc()
+

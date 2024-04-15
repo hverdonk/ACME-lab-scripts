@@ -1,0 +1,173 @@
+######################
+## Helper Functions ##
+######################
+def get_list(filename):
+    """extract a list of files to be analyzed, provided in FILENAME"""
+    my_list = []
+    with open(filename, 'r') as data_in:
+        for line in data_in:
+            my_list.append(line.strip())
+    return(my_list)
+
+###################
+## Configuration ##
+###################
+with open('cluster.json', 'r') as f:
+    data = json.loads(f.read())
+NODES = data['__default__']['nodes']
+PPN = data['__default__']['ppn']
+
+##########
+## DATA ##
+##########
+# type of input file (nex, fasta, etc)
+FILETYPE = "fasta"
+dataDirectory = "/data/shares/veg/hverdonk/drosophila12speciesalignments"
+resultDirectory = "/data/shares/veg/hverdonk/drosophila12speciesalignments-MSS"
+badAlignmentsFilename = "likely-bad-alignments.csv"
+# dataDirectory = "/data/shares/veg/hverdonk/primatecdsalignments"
+# resultDirectory = "/data/shares/veg/hverdonk/primatecdsalignments-MSS"
+
+# FILETYPE = "nex"
+# dataDirectory = "/data/shares/veg/hverdonk/MSS-sims/vary-dSs/dSs_0.85"
+# resultDirectory = "/data/shares/veg/hverdonk/MSS-sims-aligned/vary-dSs/dSs_0.85" 
+
+#if analyzing particular files from a text list (e.g., when analyzing a subset of the data), uncomment the lines below
+#targetFILES = get_list("")
+#FILES = [dataDirectory + i for i in targetFILES] 
+
+FILES = glob_wildcards(dataDirectory + "/{file}." + FILETYPE).file
+
+################
+## HYPHY vars ##
+################
+hyphy = "/usr/local/bin/hyphy"
+HYPHYMP = "/home/hverdonk/hyphy-develop/HYPHYMP"
+HYPHYMPI = "/home/hverdonk/hyphy-develop/HYPHYMPI"
+LIBPATH = "/home/hverdonk/hyphy-develop/res"
+
+###########################
+## Codon aware MSA tools ##
+###########################
+PRE_MSA = "/home/hverdonk/hyphy-analyses/codon-msa/pre-msa.bf"
+POST_MSA = "/home/hverdonk/hyphy-analyses/codon-msa/post-msa.bf"
+
+###############
+## MSS tools ##
+###############
+FIT_MODEL = "/usr/local/share/hyphy-analyses/FitModel/FitModel.bf"
+# NEUTRAL_SYNREV = resultDirectory + "SynREV-neutral-codons.tsv"
+# NEUTRAL_FA1 = resultDirectory + "FA1-neutral-codons.tsv"
+
+################
+## MG94 tools ##
+################
+FIT_MG94 = "/usr/local/share/hyphy-analyses/FitMG94/FitMG94.bf"
+
+print("Files are: ", FILES)
+
+rule all:
+    input:
+        # expand(resultDirectory + "/raxml/{file}.msa.raxml.bestTree", file = FILES)
+        resultDirectory + "/" + badAlignmentsFilename,
+        expand(resultDirectory + "/filtered_fits/{GENE}.raxml.FILTER.json", GENE = FILES),
+        expand(resultDirectory + "/post_msa_filtered/{GENE}.raxml.FILTER.fas", GENE = FILES)        
+
+rule pre_msa:
+    input: dataDirectory + "/{file}." + FILETYPE
+    output: multiext (resultDirectory +"/pre_msa/{file}", "_protein.fas", "_nuc.fas")
+    shell: 
+        '''
+        mkdir -p {resultDirectory}/pre_msa
+        mpirun -np {PPN} {HYPHYMPI} LIBPATH={LIBPATH} {PRE_MSA} CPU={threads} --input {input} --protein "{resultDirectory}/pre_msa/{wildcards.file}_protein.fas" --rna "{resultDirectory}/pre_msa/{wildcards.file}_nuc.fas"
+        '''
+    
+rule mafft:
+    input: resultDirectory + "/pre_msa/{file}_protein.fas"
+    output: resultDirectory + "/mafft/{file}.prot"
+    threads:
+        PPN
+    shell: 
+        '''
+        mkdir -p {resultDirectory}/mafft
+        /usr/local/bin/mafft --quiet {input} > "{resultDirectory}/mafft/{wildcards.file}.prot"
+        ''' 
+    
+rule post_msa:
+    input: resultDirectory + "/mafft/{file}.prot"
+    output: 
+        seq = resultDirectory + "/post_msa/{file}.msa"
+    shell: 
+        '''
+        mkdir -p {resultDirectory}/post_msa
+        mpirun -np {PPN} {HYPHYMPI} LIBPATH={LIBPATH} {POST_MSA} CPU={threads} --protein-msa {input} --nucleotide-sequences "{resultDirectory}/pre_msa/{wildcards.file}_nuc.fas" --output {output}
+        '''
+
+rule raxml:
+    input: resultDirectory + "/post_msa/{file}.msa"
+    output: 
+        tree = resultDirectory + "/raxml/{file}.msa.raxml.bestTree"
+    threads:
+        PPN
+    resources:
+        mem_mb=16000
+    shell: 
+        '''
+        mkdir -p {resultDirectory}/raxml
+        raxml-ng --force --msa {input} --model GTR+G --threads {threads} --prefix {resultDirectory}/raxml/{wildcards.file}.msa
+        ''' 
+
+#---------------------------------------------------------------------------- 
+# Run BUSTED WITH ERROR SINK COMPONENT THEN HMM
+#---------------------------------------------------------------------------- 
+rule busted:
+    input:
+        seq = resultDirectory + "/post_msa/{file}.msa",
+        tree = resultDirectory + "/raxml/{file}.msa.raxml.bestTree"
+    output:
+        json = resultDirectory + "/BUSTED/{file}.BUSTED.json",
+    shell:
+        """
+        mkdir -p {resultDirectory}/BUSTED
+        {hyphy} LIBPATH={LIBPATH} BUSTED --alignment {input.seq} --tree {input.tree} --srv Yes --starting-points 5 --output {output.json}
+        """
+
+## RUN BUSTED-E ON ALL BRANCHES##
+rule busted_e:
+    input:
+        seq = resultDirectory + "/post_msa/{file}.msa",
+        tree = resultDirectory + "/raxml/{file}.msa.raxml.bestTree"
+    output:
+        json = resultDirectory + "/BUSTED-E/{file}.BUSTED-E.json", 
+        # json = resultDirectory + "/BUSTED-E/{file}.raxml.BUSTED-E.json", 
+        # fits = resultDirectory + "/BUSTED-E/{file}.raxml.BUSTED-E-fit.lf"
+    shell:
+        """
+        mkdir -p {resultDirectory}/BUSTED-E
+        {hyphy} LIBPATH={LIBPATH} BUSTED --alignment {input.seq} --tree {input.tree} --srv Yes --starting-points 5 --output {output.json} --error-sink Yes --save-fit {output.fits}
+        """
+ 
+rule filter:
+    input:
+        e_json = resultDirectory + "/BUSTED-E/{file}.BUSTED-E.json"
+    output:
+        json = resultDirectory + "/filtered_fits/{file}.FILTER.json",
+        seq = resultDirectory + "/post_msa_filtered/{file}.FILTER.msa"
+    shell:
+        """
+        mkdir -p {resultDirectory}/filtered_fits
+        mkdir -p {resultDirectory}/post_msa_filtered
+        {hyphy} LIBPATH={LIBPATH} error-filter {input.e_json} --output {output.seq} --output-json {output.json}
+        """
+
+rule LRT:
+    input:
+        expand(resultDirectory + "/BUSTED/{GENE}.BUSTED.json", GENE = FILES),
+        expand(resultDirectory + "/BUSTED-E/{GENE}.BUSTED-E.json", GENE = FILES)
+    output:
+        file = resultDirectory + "/" + badAlignmentsFilename
+    shell:
+        """
+        # p-value threshold for LRT is 0.05 by default, but can be set with --pthresh
+        python3 BUSTED-E-LRT.py --busted {resultDirectory}/BUSTED/ --bustedE {resultDirectory}/BUSTED-E/ --outfile {output.file}
+        """

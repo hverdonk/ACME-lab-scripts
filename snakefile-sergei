@@ -1,0 +1,58 @@
+##########
+## DATA ##
+##########
+dataDirectory = "/data/shares/veg/hverdonk/drosophila12speciesalignments/"
+resultDirectory = "/data/shares/veg/hverdonk/drosophila12speciesalignments-MSS/"
+
+FILES = glob_wildcards(dataDirectory + "{file}.fasta").file
+#TODO: remove the line below
+FILES = FILES[0]
+
+################
+## HYPHY vars ##
+################
+HYPHYMP = "/home/hverdonk/hyphy-develop/HYPHYMP"
+HYPHYMPI = "/home/hverdonk/hyphy-develop/HYPHYMPI"
+LIBPATH = "/home/hverdonk/hyphy-develop/res"
+
+###########################
+## Codon aware MSA tools ##
+###########################
+PRE = "/home/hverdonk/hyphy-analyses/codon-msa/pre-msa.bf"
+POST = "/home/hverdonk/hyphy-analyses/codon-msa/post-msa.bf"
+
+print("Files are: ", FILES)
+
+rule all:
+    input:
+        expand(resultDirectory + "/MSS/{file}.MSS.json", file = FILES)
+        
+rule pre_msa:
+    input: dataDirectory + "{file}.fasta"
+    output: multiext (resultDirectory +"/pre_msa/{file}", "_protein.fas", "_nuc.fas")
+    threads: 4
+    shell: '/usr/local/bin/hyphy /usr/local/share/hyphy-analyses/codon-msa/pre-msa.bf CPU={threads} --input {input} --protein "' + resultDirectory + '{wildcards.file}_protein.fas" --rna "' + resultDirectory + '{wildcards.file}_nuc.fas"' 
+    
+rule mafft:
+    input: resultDirectory + "/pre_msa/{file}_protein.fas"
+    output: resultDirectory + "/mafft/{file}.prot"
+    threads: 4
+    shell: '/usr/local/bin/mafft --quiet {input} > "' + resultDirectory + '{wildcards.file}.prot"' 
+    
+rule post_msa:
+    input: resultDirectory + "/mafft/{file}.prot"
+    output: resultDirectory + "/post_msa/{file}.msa"
+    threads: 4
+    shell: '/usr/local/bin/hyphy /usr/local/share/hyphy-analyses/codon-msa/post-msa.bf CPU={threads} --protein-msa {input} --nucleotide-sequences "' + resultDirectory + '{wildcards.file}_nuc.fas" --output {output}' 
+
+rule raxml:
+    input: resultDirectory + "/post_msa/{file}.msa"
+    output: resultDirectory + "/raxml/{file}.msa.raxml.bestTree"
+    threads: 4
+    shell: 'raxml-ng --force --msa {input} --model GTR+G --threads {threads}' 
+ 
+rule MSS:
+    input: resultDirectory + "/raxml/{file}.msa.raxml.bestTree"
+    output: resultDirectory + "/MSS/{file}.MSS.json"
+    threads: 4
+    shell: '/usr/local/bin/hyphy /usr/local/share/hyphy-analyses/FitModel/FitModel.bf CPU={threads} --model MSS --tree {input} --alignment "' + resultDirectory + '{wildcards.file}.msa" --mss-type SynREVCodon --input {input} --output {output}' 

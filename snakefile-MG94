@@ -1,0 +1,77 @@
+###################
+### Configuration ##
+####################
+with open('cluster.json', 'r') as f:
+    data = json.loads(f.read())
+    NODES = data['__default__']['nodes']
+    PPN = data['__default__']['ppn']
+
+##########
+## DATA ##
+##########
+resultDirectory = "/data/shares/veg/hverdonk/drosophila12speciesalignments-MSS"
+dissenter_set = ""   # leave empty quotes if running on full dataset
+outfile = "20240326_drosophila_MG94"
+#if analyzing particular files from a text list (e.g., when analyzing a subset of the data), uncomment the lines below
+#targetFILES = get_list("")
+#FILES = [dataDirectory + i for i in targetFILES] 
+
+FILES = glob_wildcards(resultDirectory + "/raxml" + dissenter_set + "/{file}.msa.raxml.bestTree").file
+
+################
+## HYPHY vars ##
+################
+hyphy = "/usr/local/bin/hyphy"
+HYPHYMP = "/home/hverdonk/hyphy-develop/HYPHYMP"
+HYPHYMPI = "/home/hverdonk/hyphy-develop/HYPHYMPI"
+LIBPATH = "/home/hverdonk/hyphy-develop/res"
+
+###############
+## MSS tools ##
+###############
+FIT_MODEL = "/home/hverdonk/hyphy-analyses/MulticlassSynonymousSubstitutions/MultipleSynClasses.bf"
+# FIT_MODEL = "/home/hverdonk/hyphy-analyses/FitModel/FitModel.bf"
+# NEUTRAL_SYNREV = resultDirectory + "SynREV-neutral-codons.tsv"
+# NEUTRAL_FA1 = resultDirectory + "FA1-neutral-codons.tsv"
+
+################
+## MG94 tools ##
+################
+FIT_MG94 = "/home/hverdonk/hyphy-analyses/FitMG94/FitMG94.bf"
+
+###########################
+# Result processing tools #
+###########################
+RESULT_PROCESSOR = "/data/shares/veg/hverdonk/python/combine_results_4.py"
+
+print("Files are: " + str(FILES))
+
+rule all:
+    input:
+        resultDirectory + "/" + outfile + ".csv"
+
+rule MG94:
+    input: 
+        tree = resultDirectory + "/raxml" + dissenter_set + "/{file}.msa.raxml.bestTree",
+        alignment = resultDirectory + "/post_msa" + dissenter_set + "/{file}.msa",
+    output: 
+        resultDirectory + "/MG94/{file}.MG94.json"
+    threads: 
+        8
+    shell: 
+        '''
+        mkdir -p {resultDirectory}/MG94
+        {hyphy} {FIT_MG94} --alignment {input.alignment} --output {output} --tree {input.tree}
+        '''
+
+rule combine_results:
+    input:
+        expand(resultDirectory + "/MG94/{file}.MG94.json", file=FILES) 
+    output:
+        resultDirectory + "/" + outfile + ".csv"
+    shell:
+        '''
+        # one of the MODEL arguments is a label, the other specifies what model was fit to the data
+        python3 {RESULT_PROCESSOR} -i {resultDirectory}/MG94 MG94 MG94 > {output}
+
+        '''

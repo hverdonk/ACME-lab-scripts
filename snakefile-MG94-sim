@@ -1,0 +1,70 @@
+import traceback
+
+###################
+## Configuration ##
+###################
+PPN = 8
+
+##########
+## DATA ##
+##########
+TREE = "/data/shares/veg/hverdonk/enterobacteria_15species_alignments-MSS/raxml/atpD_15_species.msa.raxml.bestTree"
+BASE_FREQ = "/data/shares/veg/hverdonk/enterobacteria_15species_alignments/atpD_15_species.fasta"
+resultDirectory = "/data/shares/veg/hverdonk/MSS-sims/null-MG94/"
+
+################
+## HYPHY vars ##
+################
+HYPHY = "/usr/local/bin/hyphy"
+HYPHYMP = "/home/hverdonk/hyphy-develop/HYPHYMP"
+HYPHYMPI = "/home/hverdonk/hyphy-develop/HYPHYMPI"
+LIBPATH = "/home/hverdonk/hyphy-develop/res"
+
+###################
+## MSS simulator ##
+###################
+SIM_MG94 = "/home/hverdonk/hyphy-analyses/SimulateMG94/SimulateMG94.bf"
+
+###########################
+## Simulation Parameters ##
+###########################
+REPS = 1500
+SIMULATIONS = list(range(1,REPS+1))
+OMEGA_VALS = [0.01, 0.1, 0.5, 1, 3]
+SEQ_LENGTHS = [500]
+
+
+
+rule all:
+    input:
+        # expand(resultDirectory +"vary-omega/omega{omega}.replicate.{simulation}.nex", simulation=SIMULATIONS, omega=OMEGA_VALS),
+        expand(resultDirectory +"MG94.length{len}.replicate.{simulation}.nex", len=SEQ_LENGTHS, simulation=SIMULATIONS)
+ 
+rule omega:
+    input: 
+        newick = TREE,
+        frequencies = BASE_FREQ
+    output: 
+        expand(resultDirectory +"vary-omega/omega{omega}.replicate.{simulation}.nex", omega=OMEGA_VALS, simulation=SIMULATIONS)
+    log:
+        "/data/shares/veg/hverdonk/simMSS.log"
+    threads: 4
+    run:
+        for o in OMEGA_VALS:
+            shell('{HYPHY} {SIM_MG94} --model MG94 --replicates 20 --sites 500 --branch-variation constant --tree {input.newick} --output ' + resultDirectory + 'omega%s --omega %s --base-frequencies {input.frequencies}' % (o,o))
+
+rule length:
+    input:
+        newick = TREE,
+        frequencies = BASE_FREQ
+    output:
+        expand(resultDirectory +"MG94.length{len}.replicate.{simulation}.nex", len=SEQ_LENGTHS, simulation=SIMULATIONS)
+    threads: 4
+    run:
+        try:
+            for l in SEQ_LENGTHS:
+                shell("{HYPHY} {SIM_MG94} --model MG94 --replicates " + str(REPS) + " --sites " + str(l) + "  --branch-variation constant --tree {input.newick} --output " + resultDirectory + "MG94.length" + str(l) + " --omega 0.1 --base-frequencies {input.frequencies}")
+        except Exception:
+            traceback.print_exc()
+
+

@@ -1,0 +1,1 @@
+python3 /data/shares/veg/hverdonk/python/subsample.py --replicates 1 -n 100  --dir saccharomyces_8species_MSAs-MSS/GA-alignments -o /data/shares/veg/hverdonk/saccharomyces_8species_MSAs-MSS/subsamples/saccharomyces-2class-subsample

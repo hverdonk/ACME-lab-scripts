@@ -1,0 +1,125 @@
+###################
+### Configuration ##
+####################
+#source /etc/profile.d/modules.sh
+#module load aocc/4.0.0;
+
+with open('cluster.json', 'r') as f:
+    data = json.loads(f.read())
+    NODES = data['__default__']['nodes']
+    PPN = data['__default__']['ppn']
+
+##########
+## DATA ##
+##########
+resultDirectory = "/data/shares/veg/hverdonk/saccharomyces_8species_MSAs-MSS"
+GA_results = "/data/shares/veg/hverdonk/enterobacteria_15species_alignments-MSS/GA-results/GA-2classes-results/enterobacteria-subsamples/enterobacteria-subsample1.tsv"
+dissenter_set = "" # leave empty quotes if running on full dataset
+# outfile = "20230921_enterobacteria_aaGA_100alignments_MSS"
+outfile = "20240327_saccharomyces_SynREVCodon"
+GA_type = "SynREVCodon"
+# GA_type is also MSS type, and can be File (for a GA partitioned run) or SynREVCodon
+# Sergei may have changed how the model outputs MSS results when you give it a partition file, so be careful when using "MSS" on the results processing script
+
+# set up parameters for fitting MSS model
+if (GA_type == 'File'):
+    ARGS = "--mss-type File --mss-neutral NEUTRAL --mss-file " + GA_results
+elif (GA_type == 'SynREV'):
+    ARGS = "--mss-type SynREV"
+else:
+    ARGS = "--mss-type SynREVCodon"
+
+#if analyzing particular files from a text list (e.g., when analyzing a subset of the data), uncomment the lines below
+#targetFILES = get_list("")
+#FILES = [dataDirectory + i for i in targetFILES] 
+
+FILES = glob_wildcards(resultDirectory + "/raxml" + dissenter_set + "/{file}.msa.raxml.bestTree").file
+MSAs = glob_wildcards(resultDirectory + "/post_msa" + dissenter_set + "/{file}.msa").file
+
+################
+## HYPHY vars ##
+################
+hyphy = "/usr/local/bin/hyphy"
+HYPHYMP = "/home/hverdonk/hyphy-develop/HYPHYMP"
+HYPHYMPI = "/home/hverdonk/hyphy-develop/HYPHYMPI"
+LIBPATH = "/home/hverdonk/hyphy-develop/res"
+
+###############
+## MSS tools ##
+###############
+# FIT_MODEL = "/home/hverdonk/hyphy-analyses/MulticlassSynonymousSubstitutions/MultipleSynClasses.bf"
+FIT_MODEL = "/home/hverdonk/hyphy-analyses/FitModel/FitModel.bf"
+# NEUTRAL_SYNREV = resultDirectory + "SynREV-neutral-codons.tsv"
+# NEUTRAL_FA1 = resultDirectory + "FA1-neutral-codons.tsv"
+
+################
+## MG94 tools ##
+################
+FIT_MG94 = "/usr/local/share/hyphy-analyses/FitMG94/FitMG94.bf"
+
+###########################
+# Result processing tools #
+###########################
+RESULT_PROCESSOR = "/data/shares/veg/hverdonk/python/combine_results_4.py"
+
+####################
+# Helper Functions #
+####################
+# handle the case where some alignments have different file names, because they've been filtered
+def format_input(wildcards):
+    curr_file = [f for f in MSAs if wildcards.file in f]
+    if 'FILTER' in curr_file[0]:
+        return resultDirectory + "/post_msa" + dissenter_set + "/" + curr_file[0] + ".msa"
+    else:
+        return resultDirectory + "/post_msa" + dissenter_set + "/" + wildcards.file + ".msa"
+
+print("Files are: " + str(FILES))
+
+rule all:
+    input:
+        resultDirectory + "/" + outfile + ".csv"
+
+
+rule MSS:
+    input:
+        tree = resultDirectory + "/raxml" + dissenter_set + "/{file}.msa.raxml.bestTree",
+        alignment = format_input,
+        partition_file = GA_results
+    output: 
+        resultDirectory + "/" + GA_type + "/{file}.MSS.json"
+    threads:
+        PPN
+    shell: 
+        '''
+        mkdir -p {resultDirectory}/{GA_type}
+        # how the command is run in the hyphy-analyses/MulticlassSynonymousSubstitutions/ github repo
+        # mpirun -np {PPN} {HYPHYMPI} {FIT_MODEL} --tree {input.tree} --alignment "{resultDirectory}/post_msa/{wildcards.file}.msa" --neutral NEUTRAL --classes {input.partition_file} --output {output}
+        # how Sergei showed me to run the command originally
+        # mpirun -np {PPN} {HYPHYMPI} {FIT_MODEL} --model MSS --tree {input.tree} --alignment "{resultDirectory}/post_msa/{wildcards.file}.msa" --neutral NEUTRAL --classes {input.partition_file} --mss-type File --output {output}
+
+        # run full model, not just amino acid model. MSS type can be File (for a GA partitioned run) or SynREVCodon
+        # mpirun -np {PPN} {HYPHYMPI} {FIT_MODEL} --model MSS --tree {input.tree} --alignment {input.alignment} {ARGS} --output {output}
+
+        # same as above, but run using local hyphy instance
+        {hyphy} {FIT_MODEL} --model MSS --tree {input.tree} --alignment {input.alignment} {ARGS} --output {output}
+        '''
+
+rule combine_results:
+    input:
+        expand(resultDirectory + "/" + GA_type + "/{file}.MSS.json", file=FILES) 
+        # directory(resultDirectory + "/MSS")
+    output:
+        resultDirectory + "/" + outfile + ".csv"
+    params:
+        model = "REV" if (GA_type == "SynREV") else GA_type
+    shell:
+        '''
+        # one of the MODEL arguments is a label, the other specifies what model was fit to the data (it's -i [filepath] [label] [model])
+        # run normal MSS
+        # python3 {RESULT_PROCESSOR} -i {resultDirectory}/MSS {GA_type} MSS > {output}
+        
+        # run SynREVCodon
+        python3 {RESULT_PROCESSOR} -i {resultDirectory}/{GA_type} {GA_type} {params.model} > {output}
+        '''
+
+

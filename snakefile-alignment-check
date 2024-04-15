@@ -1,0 +1,105 @@
+"""
+CHECK ALIGNMENTS FOR PRESENCE OF ALIGNMENT ERRORS THAT COULD AFFECT CODON MODEL RESULTS
+
+@Author: Hannah Verdonk
+@Requires: Hyphy Develop branch
+
+2023
+"""
+
+#----------------------------------------------------------------------------
+# Description
+#----------------------------------------------------------------------------
+import os
+import sys
+import json
+import csv
+from pathlib import Path
+import glob
+
+#----------------------------------------------------------------------------
+# Settings
+#----------------------------------------------------------------------------
+BASEDIR = os.getcwd()
+
+# Which project are we analyzing?
+DATA_DIRECTORY = "/data/shares/veg/hverdonk/enterobacteria_15species_alignments-MSS"
+
+# Get gene names
+gene_names = glob_wildcards(DATA_DIRECTORY + "/raxml/{file}.msa.raxml.bestTree").file
+
+# Where do the results go?
+OUTDIR = "/data/shares/veg/hverdonk/enterobacteria_15species_alignments-MSS/BUSTED-alignment-check"
+
+# Create output directories
+Path(OUTDIR).mkdir(parents=True, exist_ok=True)
+
+
+
+#----------------------------------------------------------------------------
+# Resources
+#----------------------------------------------------------------------------
+HYPHY    = "/usr/local/bin/hyphy"
+RES      = "/home/hverdonk/hyphy-develop/res"
+HYPHY_ANALYSES = "/home/hverdonk/hyphy-analyses"
+# BUSTED = os.path.join(HYPHY_ANALYSES, "BUSTED-PH", "BUSTED-PH.bf")
+
+
+
+#---------------------------------------------------------------------------- 
+# rule all
+#----------------------------------------------------------------------------
+
+rule all:
+    input: 
+        expand(os.path.join(OUTDIR, "{GENE}.BUSTED-E.json"), GENE = gene_names),
+        expand(os.path.join(OUTDIR, "{GENE}.BUSTED.json"), GENE = gene_names),
+ #end input 
+#end rule 
+
+#---------------------------------------------------------------------------- 
+# Run BUSTED WITH ERROR SINK COMPONENET
+#---------------------------------------------------------------------------- 
+rule busted_e:
+    input:
+        tree = DATA_DIRECTORY + "/raxml/{GENE}.msa.raxml.bestTree",
+        seq = DATA_DIRECTORY + "/post_msa/{GENE}.msa",
+    output:
+        json = os.path.join(OUTDIR, "{GENE}.BUSTED-E.json"), 
+        fits = os.path.join(OUTDIR, "{GENE}.BUSTED-E-fit.lf")
+    shell:
+         """
+         {HYPHY} LIBPATH={RES} busted --alignment {input.seq} --tree {input.tree} --srv Yes --starting-points 5 --output {output.json} --error-sink Yes --save-fit {output.fits}
+         """
+
+#---------------------------------------------------------------------------- 
+# Run BUSTED WITHOUT ERROR SINK COMPONENET
+#---------------------------------------------------------------------------- 
+rule busted:
+    input:
+        tree = DATA_DIRECTORY + "/raxml/{GENE}.msa.raxml.bestTree",
+        seq = DATA_DIRECTORY + "/post_msa/{GENE}.msa",
+    output:
+        json = os.path.join(OUTDIR, "{GENE}.BUSTED.json"), 
+        fits = os.path.join(OUTDIR, "{GENE}.BUSTED-fit.lf")
+    shell:
+         """
+         {HYPHY} LIBPATH={RES} busted --alignment {input.seq} --tree {input.tree} --srv Yes --starting-points 5 --output {output.json} --save-fit {output.fits}
+         """
+         
+#---------------------------------------------------------------------------- 
+# Run RESULT PARSING SCRIPT
+#---------------------------------------------------------------------------- 
+# parse results files into a single json with /data/shares/veg/SelectionScreens/python/result_summary.py
+# parsed results to be viewed in an Observable notebook:
+# https://observablehq.com/@spond/busted
+# rule parse_results:
+#     input: 
+        
+
+
+#----------------------------------------------------------------------------
+# End of file
+#----------------------------------------------------------------------------
+
+
